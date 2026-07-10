@@ -1,0 +1,9 @@
+langchain
+langchain-ollama
+langchain-core
+edge-tts
+SpeechRecognition
+fastapi
+uvicorn
+httpx
+pytest
