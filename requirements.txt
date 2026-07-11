@@ -1,5 +1,5 @@
 langchain
-langchain-ollama
+langchain-groq
 langchain-core
 edge-tts
 SpeechRecognition
@@ -7,3 +7,6 @@ fastapi
 uvicorn
 httpx
 pytest
+dotenv
+groq
+

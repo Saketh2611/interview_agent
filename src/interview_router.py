@@ -48,7 +48,8 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
         session_id=session,
         system_prompt=STRICT_INTERVIEW_SYSTEM_PROMPT,
     )
-    await websocket.send_json({"type": "assistant", "text": initial_question, "audio": None})
+    initial_audio = await _generate_audio_payload(initial_question)
+    await websocket.send_json({"type": "assistant", "text": initial_question, "audio": initial_audio})
 
     try:
         while True:
@@ -58,6 +59,10 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
 
             if message_type == "audio":
                 audio_bytes = base64.b64decode(payload.get("data", ""))
+                if len(audio_bytes) < 100:
+                    await websocket.send_json({"type": "error", "text": "Audio too short. Please try again."})
+                    continue
+
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                     tmp_file.write(audio_bytes)
                     temp_path = tmp_file.name
@@ -67,6 +72,10 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
                 finally:
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
+
+                if not transcript or not transcript.strip():
+                    await websocket.send_json({"type": "error", "text": "Could not understand audio. Please try again."})
+                    continue
 
                 user_text = transcript
             else:

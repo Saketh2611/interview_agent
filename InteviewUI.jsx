@@ -9,8 +9,6 @@ const InterviewUI = () => {
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
   
   const ws = useRef(null);
-  const mediaRecorder = useRef(null);
-  const audioChunks = useRef([]);
   const messagesEndRef = useRef(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -69,40 +67,65 @@ const InterviewUI = () => {
     setInputText("");
   };
 
-  // Handle Microphone Recording
+  // Convert Float32 PCM samples to a WAV Blob
+  const encodeWAV = (samples, sampleRate) => {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+
+    const writeString = (offset, str) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true); // byte rate
+    view.setUint16(32, 2, true); // block align
+    view.setUint16(34, 16, true); // bits per sample
+
+    writeString(36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+
+    return new Blob([buffer], { type: 'audio/wav' });
+  };
+
+  // Handle Microphone Recording using AudioContext for WAV output
+  const audioContextRef = useRef(null);
+  const scriptProcessorRef = useRef(null);
+  const recordedSamplesRef = useRef([]);
+  const streamRef = useRef(null);
+
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorder.current = new MediaRecorder(stream);
-      audioChunks.current = [];
+      streamRef.current = stream;
+      recordedSamplesRef.current = [];
 
-      mediaRecorder.current.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunks.current.push(event.data);
-        }
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      audioContextRef.current = audioContext;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      scriptProcessorRef.current = processor;
+
+      processor.onaudioprocess = (e) => {
+        const channelData = e.inputBuffer.getChannelData(0);
+        recordedSamplesRef.current.push(new Float32Array(channelData));
       };
 
-      mediaRecorder.current.onstop = async () => {
-        const audioBlob = new Blob(audioChunks.current, { type: 'audio/webm' });
-        
-        // Convert Blob to Base64
-        const reader = new FileReader();
-        reader.readAsDataURL(audioBlob);
-        reader.onloadend = () => {
-          const base64data = reader.result.split(',')[1]; // Remove data URI prefix
-          if (ws.current && isConnected) {
-            ws.current.send(JSON.stringify({
-              type: "audio",
-              data: base64data
-            }));
-          }
-        };
-        
-        // Stop all tracks to release microphone
-        stream.getTracks().forEach(track => track.stop());
-      };
+      source.connect(processor);
+      processor.connect(audioContext.destination);
 
-      mediaRecorder.current.start();
       setIsRecording(true);
     } catch (err) {
       console.error("Microphone access denied:", err);
@@ -111,10 +134,49 @@ const InterviewUI = () => {
   };
 
   const stopRecording = () => {
-    if (mediaRecorder.current && isRecording) {
-      mediaRecorder.current.stop();
-      setIsRecording(false);
+    if (!isRecording) return;
+    setIsRecording(false);
+
+    if (scriptProcessorRef.current) {
+      scriptProcessorRef.current.disconnect();
+      scriptProcessorRef.current = null;
     }
+
+    const sampleRate = audioContextRef.current?.sampleRate || 44100;
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
+    // Merge all recorded chunks into one Float32Array
+    const chunks = recordedSamplesRef.current;
+    const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+    const merged = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    const wavBlob = encodeWAV(merged, sampleRate);
+
+    const reader = new FileReader();
+    reader.readAsDataURL(wavBlob);
+    reader.onloadend = () => {
+      const base64data = reader.result.split(',')[1];
+      if (ws.current && isConnected) {
+        ws.current.send(JSON.stringify({
+          type: "audio",
+          data: base64data
+        }));
+      }
+    };
   };
 
   return (

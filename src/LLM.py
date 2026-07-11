@@ -1,9 +1,13 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()  # Load environment variables from .env file
+
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 try:
-    from langchain_ollama import ChatOllama
+    from langchain_groq import ChatGroq
 except ImportError:  # pragma: no cover - runtime fallback
-    ChatOllama = None
+    ChatGroq = None
 
 class LLMService:
     _instance = None
@@ -18,13 +22,22 @@ class LLMService:
         """Initializes the model and the session memory storage."""
         print("Initializing Multi-turn LLM Service...")
         self.llm = None
-        if ChatOllama is not None:
+
+        groq_api_key = os.getenv("GROQ_API_KEY")
+
+        if ChatGroq is not None and groq_api_key:
             try:
-                self.llm = ChatOllama(model="qwen3:4b", temperature=0)
+                self.llm = ChatGroq(
+                    model="llama-3.3-70b-versatile",
+                    temperature=0,
+                    api_key=groq_api_key,
+                )
             except Exception as exc:
                 print(f"LLM initialization failed: {exc}")
+        elif ChatGroq is None:
+            print("langchain_groq is not installed; using fallback responses.")
         else:
-            print("langchain_ollama is not installed; using fallback responses.")
+            print("GROQ_API_KEY not set; using fallback responses.")
 
         # Dictionary to store chat histories. Key = session_id, Value = List of messages
         self.sessions = {}
